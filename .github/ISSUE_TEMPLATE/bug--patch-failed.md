@@ -3,7 +3,7 @@ name: 'Bug: Patch Failed'
 about: kptools fails to patch kernel image
 title: 'Patch Failed (Device Name) (Device Kerenl Version) '
 labels: ''
-assignees: bmax121
+assignees: ''
 
 ---
 
