@@ -19,6 +19,7 @@ uint64_t __attribute__((section(".fp.transit0.text"))) __attribute__((__noinline
     uint32_t *vptr = (uint32_t *)this_va;
     while (*--vptr != ARM64_NOP) {
     };
+    vptr--;
     fp_hook_chain_t *hook_chain = local_container_of((uint64_t)vptr, fp_hook_chain_t, transit);
     hook_fargs0_t fargs;
     fargs.skip_origin = 0;
@@ -52,6 +53,7 @@ _fp_transit4(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3)
     uint32_t *vptr = (uint32_t *)this_va;
     while (*--vptr != ARM64_NOP) {
     };
+    vptr--;
     fp_hook_chain_t *hook_chain = local_container_of((uint64_t)vptr, fp_hook_chain_t, transit);
     hook_fargs4_t fargs;
     fargs.skip_origin = 0;
@@ -91,6 +93,7 @@ _fp_transit8(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_
     uint32_t *vptr = (uint32_t *)this_va;
     while (*--vptr != ARM64_NOP) {
     };
+    vptr--;
     fp_hook_chain_t *hook_chain = local_container_of((uint64_t)vptr, fp_hook_chain_t, transit);
     hook_fargs8_t fargs;
     fargs.skip_origin = 0;
@@ -136,6 +139,7 @@ _fp_transit12(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64
     uint32_t *vptr = (uint32_t *)this_va;
     while (*--vptr != ARM64_NOP) {
     };
+    vptr--;
     fp_hook_chain_t *hook_chain = local_container_of((uint64_t)vptr, fp_hook_chain_t, transit);
     hook_fargs12_t fargs;
     fargs.skip_origin = 0;
@@ -205,9 +209,10 @@ static hook_err_t hook_chain_prepare(uint32_t *transit, int32_t argno)
     // todo: assert
     if (transit_num >= TRANSIT_INST_NUM) return -HOOK_TRANSIT_NO_MEM;
 
-    transit[0] = ARM64_NOP;
+    transit[0] = ARM64_BTI_JC;
+    transit[1] = ARM64_NOP;
     for (int i = 0; i < transit_num; i++) {
-        transit[i + 1] = ((uint32_t *)transit_start)[i];
+        transit[i + 2] = ((uint32_t *)transit_start)[i];
     }
     return HOOK_NO_ERR;
 }
@@ -216,13 +221,12 @@ void fp_hook(uintptr_t fp_addr, void *replace, void **backup)
 {
     uint64_t *entry = pgtable_entry_kernel(fp_addr);
     uint64_t ori_prot = *entry;
-    *entry = (ori_prot | PTE_DBM) & ~PTE_RDONLY;
+    modify_entry_kernel(fp_addr, entry, (ori_prot | PTE_DBM) & ~PTE_RDONLY);
     flush_tlb_kernel_page(fp_addr);
     *(uintptr_t *)backup = *(uintptr_t *)fp_addr;
     *(uintptr_t *)fp_addr = (uintptr_t)replace;
     dsb(ish);
-    *entry = ori_prot;
-    flush_tlb_kernel_page(fp_addr);
+    modify_entry_kernel(fp_addr, entry, ori_prot);
 }
 KP_EXPORT_SYMBOL(fp_hook);
 
@@ -230,14 +234,12 @@ void fp_unhook(uintptr_t fp_addr, void *backup)
 {
     uint64_t *entry = pgtable_entry_kernel(fp_addr);
     uint64_t ori_prot = *entry;
-    *entry = (ori_prot | PTE_DBM) & ~PTE_RDONLY;
-    flush_tlb_kernel_page(fp_addr);
+    modify_entry_kernel(fp_addr, entry, (ori_prot | PTE_DBM) & ~PTE_RDONLY);
     *(uintptr_t *)fp_addr = (uintptr_t)backup;
     dsb(ish);
     isb();
     flush_icache_all();
-    *entry = ori_prot;
-    flush_tlb_kernel_page(fp_addr);
+    modify_entry_kernel(fp_addr, entry, ori_prot);
 }
 KP_EXPORT_SYMBOL(fp_unhook);
 
@@ -258,6 +260,8 @@ hook_err_t fp_hook_wrap(uintptr_t fp_addr, int32_t argno, void *before, void *af
     }
 
     for (int i = 0; i < FP_HOOK_CHAIN_NUM; i++) {
+        if ((before && chain->befores[i] == before) || (after && chain->afters[i] == after)) return -HOOK_DUPLICATED;
+
         // todo: atomic or lock
         if (chain->states[i] == CHAIN_ITEM_STATE_EMPTY) {
             chain->states[i] = CHAIN_ITEM_STATE_BUSY;
